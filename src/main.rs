@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 mod data;
 mod indicators;
+mod strategy;
 
 const FAST: usize = 20;
 const SLOW: usize = 50;
