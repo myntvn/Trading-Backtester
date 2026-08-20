@@ -1,6 +1,6 @@
 use anyhow::{Result, ensure};
 
-use crate::data::Bar;
+use crate::{data::Bar, indicators::ema};
 
 /// The position a strategy wants to hold as of a given bar.
 ///
@@ -44,6 +44,18 @@ impl Strategy for EmaCross {
     }
 
     fn signals(&self, bars: &[Bar]) -> Vec<Signal> {
-        todo!()
+        let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
+
+        let fast = ema(&closes, self.fast);
+        let slow = ema(&closes, self.slow);
+
+        fast.iter()
+            .copied()
+            .zip(slow.iter().copied())
+            .map(|(f, s)| match (f, s) {
+                (Some(f), Some(s)) if f > s => Signal::Long,
+                _ => Signal::Flat,
+            })
+            .collect()
     }
 }
