@@ -59,3 +59,16 @@ impl Strategy for EmaCross {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_bad_parameters() {
+        assert!(EmaCross::new(0, 20).is_err());
+        assert!(EmaCross::new(20, 20).is_err());
+        assert!(EmaCross::new(50, 20).is_err());
+        assert!(EmaCross::new(20, 50).is_ok());
+    }
+}
