@@ -64,11 +64,42 @@ impl Strategy for EmaCross {
 mod tests {
     use super::*;
 
+    /// Build bars from a close-price path. Every OHLC field is the close,
+    /// which is all this strategy reads.
+    fn bars_from(closes: &[f64]) -> Vec<Bar> {
+        closes
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| Bar {
+                ts: i as i64,
+                open: c,
+                high: c,
+                low: c,
+                close: c,
+                volume: 0.0,
+            })
+            .collect()
+    }
+
+    fn ramp(start: f64, step: f64, n: usize) -> Vec<f64> {
+        (0..n).map(|i| start + step * i as f64).collect()
+    }
+
     #[test]
     fn rejects_bad_parameters() {
         assert!(EmaCross::new(0, 20).is_err());
         assert!(EmaCross::new(20, 20).is_err());
         assert!(EmaCross::new(50, 20).is_err());
         assert!(EmaCross::new(20, 50).is_ok());
+    }
+
+    #[test]
+    fn warmup_is_flat_then_turns_long() {
+        let bars = bars_from(&ramp(100.0, 1.0, 20));
+        let sigs = EmaCross::new(3, 5).unwrap().signals(&bars);
+
+        // The slow EMA seeds at index 4, so nothing before it can be Long.
+        assert!(sigs[..4].iter().all(|&s| s == Signal::Flat));
+        assert_eq!(sigs[4], Signal::Long);
     }
 }
