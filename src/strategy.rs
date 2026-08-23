@@ -102,4 +102,38 @@ mod tests {
         assert!(sigs[..4].iter().all(|&s| s == Signal::Flat));
         assert_eq!(sigs[4], Signal::Long);
     }
+
+    #[test]
+    fn uptrend_goes_long() {
+        let bars = bars_from(&ramp(100.0, 2.0, 60));
+        let sigs = EmaCross::new(20, 50).unwrap().signals(&bars);
+
+        assert_eq!(*sigs.last().unwrap(), Signal::Long);
+    }
+
+    #[test]
+    fn downtrend_stays_flat() {
+        let bars = bars_from(&ramp(100.0, -1.0, 60));
+        let sigs = EmaCross::new(20, 50).unwrap().signals(&bars);
+
+        assert!(sigs.iter().all(|&s| s == Signal::Flat));
+    }
+
+    #[test]
+    fn reversal_exits_the_position() {
+        let mut closes = ramp(100.0, 2.0, 60);
+        closes.extend(ramp(220.0, -3.0, 60));
+        let bars = bars_from(&closes);
+
+        let sigs = EmaCross::new(10, 30).unwrap().signals(&bars);
+
+        assert!(sigs.contains(&Signal::Long));
+        assert_eq!(*sigs.last().unwrap(), Signal::Flat);
+    }
+
+    #[test]
+    fn signal_length_matches_bar_count() {
+        let bars = bars_from(&ramp(100.0, 1.0, 37));
+        assert_eq!(EmaCross::new(3, 5).unwrap().signals(&bars).len(), 37);
+    }
 }
