@@ -7,6 +7,7 @@ use crate::strategy::{Signal, Strategy};
 mod data;
 mod indicators;
 mod strategy;
+mod engine;
 
 const FAST: usize = 20;
 const SLOW: usize = 50;
@@ -39,7 +40,7 @@ fn main() -> Result<()> {
     println!("{} bars, {flips} position changes\n", bars.len());
 
     println!(
-        "{:<12}{:>10}{:>10}{:>10}",
+        "{:<12}{:>10}{:>10}{:>10} signal",
         "date",
         "close",
         format!("ema{FAST}"),
