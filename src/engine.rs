@@ -1,3 +1,10 @@
+use anyhow::{Ok, Result, ensure};
+
+use crate::{
+    data::Bar,
+    strategy::{Signal, Strategy},
+};
+
 pub struct EngineConfig {
     pub initial_cash: f64,
 
@@ -138,4 +145,57 @@ impl Portfolio {
             force_exit: forced,
         })
     }
+}
+
+pub fn run(bars: &[Bar], strat: &dyn Strategy, cfg: &EngineConfig) -> Result<Backtest> {
+    ensure!(bars.len() >= 2, "need at least 2 bars to run a backtest");
+    ensure!(cfg.initial_cash > 0.0, "initial cash must be positive");
+    ensure!(cfg.free_bps >= 0.0, "fee_bps cannot be negative");
+
+    let signals = strat.signals(bars);
+    ensure!(
+        signals.len() == bars.len(),
+        "strategy returned {} signals for {} bars",
+        signals.len(),
+        bars.len()
+    );
+
+    let mut pf = Portfolio::new(cfg.initial_cash, cfg.free_bps);
+    let mut trades = Vec::new();
+    let mut equity = Vec::with_capacity(bars.len());
+
+    // Bar 0: nothing can have been decided yet.
+    equity.push(pf.equity(bars[0].close));
+
+    for i in 1..bars.len() {
+        let bar = &bars[i];
+
+        // The signal from the PREVIOUS close is the newest information
+        // available at this bar's open. Using signals[i] here would be
+        // lookahead bias.
+        let desired = signals[i - 1];
+
+        match (pf.open.is_some(), desired) {
+            (false, Signal::Long) => pf.buy(bar.ts, bar.open),
+            (true, Signal::Flat) => trades.extend(pf.sell(bar.ts, bar.open, false)),
+            _ => {}
+        }
+
+        equity.push(pf.equity(bar.close));
+    }
+
+    // Mark out a position still open on the final bar. Every open is behind
+    // us, so the final close is the only honest price left.
+    if pf.open.is_some() {
+        let last = bars.last().expect("bars is non-empty");
+        trades.extend(pf.sell(last.ts, last.close, true));
+        *equity.last_mut().expect("equity is non-empty") = pf.equity(last.close);
+    }
+
+    Ok(Backtest {
+        strategy: strat.name(),
+        equity,
+        trades,
+        initial_cash: cfg.initial_cash,
+    })
 }
