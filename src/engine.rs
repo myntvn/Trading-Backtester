@@ -9,14 +9,14 @@ pub struct EngineConfig {
     pub initial_cash: f64,
 
     /// Round-trip cost per side, in basis points (1 bp = 0.01%).
-    pub free_bps: f64,
+    pub fee_bps: f64,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             initial_cash: 10_000.0,
-            free_bps: 10.0,
+            fee_bps: 10.0,
         }
     }
 }
@@ -34,7 +34,7 @@ pub struct Trade {
     /// Net of fees.
     pub pnl: f64,
     /// True if the position was still open on the final bar and was marked out.
-    pub force_exit: bool,
+    pub forced_exit: bool,
 }
 
 impl Trade {
@@ -142,7 +142,7 @@ impl Portfolio {
             qty: pos.qty,
             fees: pos.entry_fee + fee,
             pnl: proceeds - pos.entry_cost,
-            force_exit: forced,
+            forced_exit: forced,
         })
     }
 }
@@ -150,7 +150,7 @@ impl Portfolio {
 pub fn run(bars: &[Bar], strat: &dyn Strategy, cfg: &EngineConfig) -> Result<Backtest> {
     ensure!(bars.len() >= 2, "need at least 2 bars to run a backtest");
     ensure!(cfg.initial_cash > 0.0, "initial cash must be positive");
-    ensure!(cfg.free_bps >= 0.0, "fee_bps cannot be negative");
+    ensure!(cfg.fee_bps >= 0.0, "fee_bps cannot be negative");
 
     let signals = strat.signals(bars);
     ensure!(
@@ -160,7 +160,7 @@ pub fn run(bars: &[Bar], strat: &dyn Strategy, cfg: &EngineConfig) -> Result<Bac
         bars.len()
     );
 
-    let mut pf = Portfolio::new(cfg.initial_cash, cfg.free_bps);
+    let mut pf = Portfolio::new(cfg.initial_cash, cfg.fee_bps);
     let mut trades = Vec::new();
     let mut equity = Vec::with_capacity(bars.len());
 
@@ -198,4 +198,98 @@ pub fn run(bars: &[Bar], strat: &dyn Strategy, cfg: &EngineConfig) -> Result<Bac
         trades,
         initial_cash: cfg.initial_cash,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::strategy::Signal::{Flat, Long};
+
+    use super::*;
+
+    /// Returns a hardcoded signal sequence, so tests can drive the engine
+    /// directly instead of reverse-engineering prices that produce crossovers.
+    struct Fixed(Vec<Signal>);
+
+    impl Strategy for Fixed {
+        fn name(&self) -> String {
+            "fixed".to_string()
+        }
+
+        fn signals(&self, _bars: &[Bar]) -> Vec<Signal> {
+            self.0.clone()
+        }
+    }
+
+    fn bar(ts: i64, open: f64, close: f64) -> Bar {
+        Bar {
+            ts,
+            open,
+            high: open.max(close),
+            low: open.min(close),
+            close,
+            volume: 0.0,
+        }
+    }
+
+    /// Flat at 100 until the last bar opens and closes at 110.
+    fn path() -> Vec<Bar> {
+        vec![
+            bar(0, 100.0, 100.0),
+            bar(1, 100.0, 100.0),
+            bar(2, 100.0, 100.0),
+            bar(3, 110.0, 110.0),
+        ]
+    }
+
+    fn no_fees() -> EngineConfig {
+        EngineConfig {
+            initial_cash: 1000.0,
+            fee_bps: 0.0,
+        }
+    }
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn one_round_trip_with_exact_pnl() {
+        // bar1: desired = signals[0] = Flat  -> nothing
+        // bar2: desired = signals[1] = Long  -> buy  at open 100, qty 10
+        // bar3: desired = signals[2] = Flat  -> sell at open 110, +100
+        let sigs = vec![Flat, Long, Flat, Flat];
+        let bt = run(&path(), &Fixed(sigs), &no_fees()).unwrap();
+
+        assert_eq!(bt.trades.len(), 1);
+
+        let t = bt.trades[0];
+
+        assert!(approx(t.entry_price, 100.0));
+        assert!(approx(t.exit_price, 110.0));
+        assert!(approx(t.qty, 10.0));
+        assert!(approx(t.pnl, 100.0));
+        assert!(approx(t.fees, 0.0));
+        assert!(!t.forced_exit);
+        assert!(t.is_win());
+
+        assert!(approx(bt.final_equity(), 1100.0));
+        assert!(approx(bt.total_return_pct(), 10.0));
+    }
+
+    #[test]
+    fn flat_forever_does_nothing() {
+        let bt = run(&path(), &Fixed(vec![Flat; 4]), &no_fees()).unwrap();
+
+        assert!(bt.trades.is_empty());
+        assert!(bt.equity.iter().all(|&e| approx(e, 1000.0)));
+    }
+
+    #[test]
+    fn fees_reduce_pnl() {
+        let sigs = vec![Flat, Long, Flat, Flat];
+        let cfg = EngineConfig {
+            fee_bps: 10.0,
+            ..no_fees()
+        };
+    }
 }
