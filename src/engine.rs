@@ -291,5 +291,70 @@ mod tests {
             fee_bps: 10.0,
             ..no_fees()
         };
+        let bt = run(&path(), &Fixed(sigs), &cfg).unwrap();
+
+        let trade = bt.trades[0];
+        assert!(trade.fees > 0.0);
+        assert!(trade.pnl < 100.0, "fees must eat into the gross gain");
+        assert!(trade.pnl > 90.0, "10 bps should not cost 10%");
+    }
+
+    #[test]
+    fn last_bar_signal_never_fills() {
+        // The Long on the final bar has no following open to fill at.
+        let sigs = vec![Flat, Flat, Flat, Long];
+        let bt = run(&path(), &Fixed(sigs), &no_fees()).unwrap();
+
+        assert!(bt.trades.is_empty(), "lookahead: filled on the signal bar");
+    }
+
+    #[test]
+    fn open_position_is_marked_out_at_the_final_close() {
+        let bt = run(&path(), &Fixed(vec![Long; 4]), &no_fees()).unwrap();
+
+        assert_eq!(bt.trades.len(), 1);
+
+        let trade = bt.trades[0];
+        assert!(trade.forced_exit);
+        assert!(approx(trade.entry_price, 100.0)); // bar 1 open
+        assert!(approx(trade.exit_price, 110.0)); // bar 3 close
+    }
+
+    #[test]
+    fn losing_trade_has_negative_pnl() {
+        let bars = vec![
+            bar(0, 100.0, 100.0),
+            bar(1, 100.0, 100.0),
+            bar(2, 100.0, 100.0),
+            bar(3, 90.0, 90.0),
+        ];
+        let sigs = vec![Flat, Long, Flat, Flat];
+        let bt = run(&bars, &Fixed(sigs), &no_fees()).unwrap();
+
+        let trade = bt.trades[0];
+        assert!(approx(trade.pnl, -100.0));
+        assert!(!trade.is_win());
+    }
+
+    #[test]
+    fn equity_length_matches_bar_count() {
+        let bt = run(&path(), &Fixed(vec![Long; 4]), &no_fees()).unwrap();
+        assert_eq!(bt.equity.len(), 4);
+    }
+
+    #[test]
+    fn rejects_bad_input() {
+        // Too few bars.
+        assert!(run(&path()[..1], &Fixed(vec![Flat]), &no_fees()).is_err());
+
+        // Non-positive cash
+        let cfg = EngineConfig {
+            initial_cash: 0.0,
+            ..no_fees()
+        };
+        assert!(run(&path(), &Fixed(vec![Flat; 4]), &cfg).is_err());
+
+        // Strategy contract violation.
+        assert!(run(&path(), &Fixed(vec![Flat; 2]), &no_fees()).is_err());
     }
 }
