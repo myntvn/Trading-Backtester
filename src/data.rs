@@ -73,6 +73,14 @@ pub fn load_csv(path: &Path) -> Result<Vec<Bar>> {
     Ok(bars)
 }
 
+/// Format a millisecond timestamp as `YYYY-MM-DD`.
+pub fn fmt_date(ts: i64) -> String {
+    Utc.timestamp_millis_opt(ts)
+        .single()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| ts.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
