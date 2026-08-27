@@ -2,22 +2,18 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::strategy::{Signal, Strategy};
+use crate::{
+    data::fmt_date,
+    engine::EngineConfig,
+};
 
 mod data;
+mod engine;
 mod indicators;
 mod strategy;
-mod engine;
 
 const FAST: usize = 20;
 const SLOW: usize = 50;
-
-fn fmt_opt(v: Option<f64>) -> String {
-    match v {
-        Some(x) => format!("{x:>10.2}"),
-        None => format!("{:>10}", "-"),
-    }
-}
 
 fn main() -> Result<()> {
     let path: PathBuf = std::env::args()
@@ -26,41 +22,45 @@ fn main() -> Result<()> {
         .into();
 
     let bars = data::load_csv(&path)?;
-    let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
-
-    let fast = indicators::ema(&closes, FAST);
-    let slow = indicators::ema(&closes, SLOW);
-
     let strat = strategy::EmaCross::new(FAST, SLOW)?;
-    let sigs = strat.signals(&bars);
+    let cfg = EngineConfig::default();
 
-    let flips = sigs.windows(2).filter(|w| w[0] != w[1]).count();
+    let bt = engine::run(&bars, &strat, &cfg)?;
 
-    println!("{}", strat.name());
-    println!("{} bars, {flips} position changes\n", bars.len());
+    println!("{}", bt.strategy);
+    println!("{} bars, {:.1} bps fees\n", bars.len(), cfg.fee_bps);
 
     println!(
-        "{:<12}{:>10}{:>10}{:>10} signal",
-        "date",
-        "close",
-        format!("ema{FAST}"),
-        format!("ema{SLOW}")
+        "{:<12} {:<12} {:>10} {:>10} {:>11} {:>8}",
+        "entry", "exit", "in", "out", "pnl", "ret%"
     );
-
-    let start = bars.len().saturating_sub(10);
-    for i in start..bars.len() {
+    for trade in &bt.trades {
         println!(
-            "{:<12}{:>10.2}{}{} {}",
-            bars[i].datetime().format("%Y-%m-%d").to_string(),
-            bars[i].close,
-            fmt_opt(fast[i]),
-            fmt_opt(slow[i]),
-            match sigs[i] {
-                Signal::Long => "LONG",
-                Signal::Flat => "flat",
-            }
-        );
+            "{:<12} {:<12} {:>10.2} {:>10.2} {:>11.2} {:>7.2}%{}",
+            fmt_date(trade.entry_ts),
+            fmt_date(trade.exit_ts),
+            trade.entry_price,
+            trade.exit_price,
+            trade.pnl,
+            trade.return_pct(),
+            if trade.forced_exit {
+                "  *still open"
+            } else {
+                ""
+            },
+        )
     }
+
+    let wins = bt.trades.iter().filter(|t| t.is_win()).count();
+    let fees: f64 = bt.trades.iter().map(|t| t.fees).sum();
+
+    println!();
+    println!("trades     {:>12}", bt.trades.len());
+    println!("wins       {:>12}", wins);
+    println!("fees paid  {:>12.2}", fees);
+    println!("initial    {:>12.2}", bt.initial_cash);
+    println!("final      {:>12.2}", bt.final_equity());
+    println!("return     {:>11.2}%", bt.total_return_pct());
 
     Ok(())
 }

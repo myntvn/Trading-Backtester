@@ -1,4 +1,4 @@
-use anyhow::{Ok, Result, ensure};
+use anyhow::{Result, ensure};
 
 use crate::{
     data::Bar,

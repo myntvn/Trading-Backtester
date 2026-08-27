@@ -13,6 +13,7 @@ pub struct Bar {
 }
 
 impl Bar {
+    #[allow(dead_code)]
     pub fn datetime(&self) -> DateTime<Utc> {
         Utc.timestamp_millis_opt(self.ts)
             .single()
