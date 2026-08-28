@@ -1,6 +1,6 @@
 use anyhow::{Result, ensure};
 
-use crate::{data::Bar, indicators::ema};
+use crate::{data::Bar, indicators::ema, strategy::Signal::Long};
 
 /// The position a strategy wants to hold as of a given bar.
 ///
@@ -57,6 +57,20 @@ impl Strategy for EmaCross {
                 _ => Signal::Flat,
             })
             .collect()
+    }
+}
+
+/// Always long. The benchmark, run through the same engine so that fees and
+/// fill timing match the strategy exactly.
+pub struct BuyHold;
+
+impl Strategy for BuyHold {
+    fn name(&self) -> String {
+        "buy and hold".to_string()
+    }
+
+    fn signals(&self, bars: &[Bar]) -> Vec<Signal> {
+        vec![Long; bars.len()]
     }
 }
 
@@ -135,5 +149,14 @@ mod tests {
     fn signal_length_matches_bar_count() {
         let bars = bars_from(&ramp(100.0, 1.0, 37));
         assert_eq!(EmaCross::new(3, 5).unwrap().signals(&bars).len(), 37);
+    }
+
+    #[test]
+    fn buy_hold_is_always_long() {
+        let bars = bars_from(&ramp(100.0, -1.0, 10));
+        let sigs = BuyHold.signals(&bars);
+
+        assert_eq!(sigs.len(), bars.len());
+        assert!(sigs.iter().all(|&s| s == Long));
     }
 }

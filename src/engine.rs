@@ -58,6 +58,8 @@ pub struct Backtest {
     pub equity: Vec<f64>,
     pub trades: Vec<Trade>,
     pub initial_cash: f64,
+    /// Bars spent holding a position, for exposure.
+    pub bars_in_market: usize,
 }
 
 impl Backtest {
@@ -163,6 +165,7 @@ pub fn run(bars: &[Bar], strat: &dyn Strategy, cfg: &EngineConfig) -> Result<Bac
     let mut pf = Portfolio::new(cfg.initial_cash, cfg.fee_bps);
     let mut trades = Vec::new();
     let mut equity = Vec::with_capacity(bars.len());
+    let mut bars_in_market = 0usize;
 
     // Bar 0: nothing can have been decided yet.
     equity.push(pf.equity(bars[0].close));
@@ -181,6 +184,10 @@ pub fn run(bars: &[Bar], strat: &dyn Strategy, cfg: &EngineConfig) -> Result<Bac
             _ => {}
         }
 
+        if pf.open.is_some() {
+            bars_in_market += 1;
+        }
+
         equity.push(pf.equity(bar.close));
     }
 
@@ -197,6 +204,7 @@ pub fn run(bars: &[Bar], strat: &dyn Strategy, cfg: &EngineConfig) -> Result<Bac
         equity,
         trades,
         initial_cash: cfg.initial_cash,
+        bars_in_market,
     })
 }
 
