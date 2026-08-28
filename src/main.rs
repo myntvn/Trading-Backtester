@@ -11,6 +11,7 @@ mod data;
 mod engine;
 mod indicators;
 mod strategy;
+mod metrics;
 
 const FAST: usize = 20;
 const SLOW: usize = 50;
