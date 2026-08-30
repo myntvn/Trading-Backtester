@@ -1,3 +1,5 @@
+use crate::engine::Backtest;
+
 #[derive(Debug, Clone)]
 pub struct Metrics {
     pub pnl: f64,
@@ -66,4 +68,64 @@ fn max_drawdown_pct(equity: &[f64]) -> f64 {
     }
 
     worst * 100.0
+}
+
+pub fn compute(bt: &Backtest, periods_per_year: f64) -> Metrics {
+    let rets = returns(&bt.equity);
+
+    let wins: Vec<f64> = bt
+        .trades
+        .iter()
+        .filter(|t| t.is_win())
+        .map(|t| t.pnl)
+        .collect();
+
+    let losses: Vec<f64> = bt
+        .trades
+        .iter()
+        .filter(|t| !t.is_win())
+        .map(|t| t.pnl)
+        .collect();
+
+    let gross_win: f64 = wins.iter().sum();
+    let gross_loss: f64 = losses.iter().sum::<f64>().abs();
+
+    let mean_or_zero = |v: &[f64]| {
+        if v.is_empty() {
+            0.0
+        } else {
+            v.iter().sum::<f64>() / v.len() as f64
+        }
+    };
+
+    let final_equity = bt.final_equity();
+
+    Metrics {
+        pnl: final_equity - bt.initial_cash,
+        total_return_pct: bt.total_return_pct(),
+        final_equity,
+        sharpe: sharpe(&rets, periods_per_year),
+        max_drawdown_pct: max_drawdown_pct(&bt.equity),
+        trades: bt.trades.len(),
+        wins: wins.len(),
+        losses: losses.len(),
+        win_rate_pct: if bt.trades.is_empty() {
+            None
+        } else {
+            Some(wins.len() as f64 / bt.trades.len() as f64 * 100.0)
+        },
+        avg_win: mean_or_zero(&wins),
+        avg_loss: mean_or_zero(&losses),
+        profit_factor: if gross_loss == 0.0 {
+            None
+        } else {
+            Some(gross_win / gross_loss)
+        },
+        exposure_pct: if bt.equity.is_empty() {
+            0.0
+        } else {
+            bt.bars_in_market as f64 / bt.equity.len() as f64 * 100.0
+        },
+        fees_paid: bt.trades.iter().map(|t| t.fees).sum(),
+    }
 }
