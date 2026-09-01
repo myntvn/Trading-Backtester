@@ -2,135 +2,123 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::{data::fmt_date, engine::EngineConfig};
+use crate::{
+    engine::EngineConfig,
+    strategy::{BuyHold, EmaCross},
+};
+
+use clap::Parser;
 
 mod data;
 mod engine;
 mod indicators;
 mod metrics;
+mod report;
 mod strategy;
 
-const FAST: usize = 20;
-const SLOW: usize = 50;
-/// Daily crypto bars: 365, not the 252 used for equities.
-const PERIODS_PER_YEAR: f64 = 365.0;
+#[derive(Parser, Debug)]
+#[command(version, about = "EMA crossover backtester for OHLCV data")]
+struct Args {
+    /// Path to a Binance-format kline CSV
+    csv: PathBuf,
 
-const LABEL_W: usize = 16;
-const COL_W: usize = 18;
+    /// Fast EMA period
+    #[arg(long, default_value_t = 20)]
+    fast: usize,
 
-fn fmt_opt(v: Option<f64>, suffix: &str) -> String {
-    match v {
-        Some(x) => format!("{x:.2}{suffix}"),
-        None => "n/a".to_string(),
-    }
-}
+    /// Slow EMA period
+    #[arg(long, default_value_t = 50)]
+    slow: usize,
 
-fn row(label: &str, a: String, b: String) {
-    println!("{label:<LABEL_W$}{a:>COL_W$}{b:>COL_W$}");
+    /// Starting capital
+    #[arg(long, default_value_t = 10_000.0)]
+    cash: f64,
+
+    /// Per-side fee in basis points (1 bp = 0.01%)
+    #[arg(long, default_value_t = 10.0)]
+    fees: f64,
+
+    /// Bars per year for Sharpe annualisation (365 daily crypto, 252 equities)
+    #[arg(long, default_value_t = 365.0)]
+    periods_per_year: f64,
+
+    /// Skip the buy & hold comparison column
+    #[arg(long)]
+    no_benchmark: bool,
 }
 
 fn main() -> Result<()> {
-    let path: PathBuf = std::env::args()
-        .nth(1)
-        .context("usage: backtester <path-to-csv>")?
-        .into();
+    let args = Args::parse();
 
-    let bars = data::load_csv(&path)?;
-    let strat = strategy::EmaCross::new(FAST, SLOW)?;
-    let cfg = EngineConfig::default();
+    let bars =
+        data::load_csv(&args.csv).with_context(|| format!("loading {}", args.csv.display()))?;
 
+    let cfg = EngineConfig {
+        initial_cash: args.cash,
+        fee_bps: args.fees,
+    };
+
+    let strat = EmaCross::new(args.fast, args.slow)?;
     let bt = engine::run(&bars, &strat, &cfg)?;
-    let m = metrics::compute(&bt, PERIODS_PER_YEAR);
+    let m = metrics::compute(&bt, args.periods_per_year);
 
-    let bench = engine::run(&bars, &strategy::BuyHold, &cfg)?;
-    let bm = metrics::compute(&bench, PERIODS_PER_YEAR);
+    report::print_header(bars.len(), bars[0].ts, bars[bars.len() - 1].ts, cfg.fee_bps);
+    report::print_trades(&bt.trades);
 
-    println!(
-        "{} bars   {} -> {}   {:.1} bps fees",
-        bars.len(),
-        fmt_date(bars[0].ts),
-        fmt_date(bars[bars.len() - 1].ts),
-        cfg.fee_bps,
-    );
+    if args.no_benchmark {
+        report::print_comparison(&[(bt.strategy.as_str(), &m)]);
+    } else {
+        let bench = engine::run(&bars, &BuyHold, &cfg)?;
+        let bm = metrics::compute(&bench, args.periods_per_year);
 
-    println!("\ntrade history");
-
-    println!(
-        "{:<12} {:<12} {:>10} {:>10} {:>11} {:>8}",
-        "entry", "exit", "in", "out", "pnl", "ret%"
-    );
-    for trade in &bt.trades {
-        println!(
-            "{:<12} {:<12} {:>10.2} {:>10.2} {:>11.2} {:>7.2}%{}",
-            fmt_date(trade.entry_ts),
-            fmt_date(trade.exit_ts),
-            trade.entry_price,
-            trade.exit_price,
-            trade.pnl,
-            trade.return_pct(),
-            if trade.forced_exit {
-                "  *still open"
-            } else {
-                ""
-            },
-        )
+        report::print_comparison(&[(bt.strategy.as_str(), &m), (bench.strategy.as_str(), &bm)]);
     }
 
-    println!();
-    println!(
-        "{:<LABEL_W$}{:>COL_W$}{:>COL_W$}",
-        "", bt.strategy, bench.strategy
-    );
-    println!("{}", "-".repeat(LABEL_W + 2 * COL_W));
-
-    row(
-        "final equity",
-        format!("{:.2}", m.final_equity),
-        format!("{:.2}", bm.final_equity),
-    );
-    row("pnl", format!("{:.2}", m.pnl), format!("{:.2}", bm.pnl));
-    row(
-        "return",
-        format!("{:.2}%", m.total_return_pct),
-        format!("{:.2}%", bm.total_return_pct),
-    );
-    row("sharpe", fmt_opt(m.sharpe, ""), fmt_opt(bm.sharpe, ""));
-    row(
-        "max drawdown",
-        format!("{:.2}%", m.max_drawdown_pct),
-        format!("{:.2}%", bm.max_drawdown_pct),
-    );
-    row(
-        "exposure",
-        format!("{:.1}%", m.exposure_pct),
-        format!("{:.1}%", bm.exposure_pct),
-    );
-    row("trades", m.trades.to_string(), bm.trades.to_string());
-    row(
-        "win rate",
-        fmt_opt(m.win_rate_pct, "%"),
-        fmt_opt(bm.win_rate_pct, "%"),
-    );
-    row(
-        "avg win",
-        format!("{:.2}", m.avg_win),
-        format!("{:.2}", bm.avg_win),
-    );
-    row(
-        "avg loss",
-        format!("{:.2}", m.avg_loss),
-        format!("{:.2}", bm.avg_loss),
-    );
-    row(
-        "profit factor",
-        fmt_opt(m.profit_factor, ""),
-        fmt_opt(bm.profit_factor, ""),
-    );
-    row(
-        "fees paid",
-        format!("{:.2}", m.fees_paid),
-        format!("{:.2}", bm.fees_paid),
-    );
-
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{CommandFactory, Parser};
+
+    use crate::Args;
+
+    #[test]
+    fn cli_is_well_formed() {
+        Args::command().debug_assert();
+    }
+
+    #[test]
+    fn defaults_are_applied() {
+        let a = Args::try_parse_from(["backtester", "x.csv"]).unwrap();
+
+        assert_eq!(a.fast, 20);
+        assert_eq!(a.slow, 50);
+        assert_eq!(a.cash, 10_000.0);
+        assert_eq!(a.periods_per_year, 365.0);
+        assert!(!a.no_benchmark);
+    }
+
+    #[test]
+    fn flags_override_defaults() {
+        let a = Args::try_parse_from([
+            "backtester",
+            "x.csv",
+            "--fast",
+            "5",
+            "--slow",
+            "20",
+            "--no-benchmark",
+        ])
+        .unwrap();
+
+        assert_eq!(a.fast, 5);
+        assert_eq!(a.slow, 20);
+        assert!(a.no_benchmark);
+    }
+
+    #[test]
+    fn csv_argument_is_required() {
+        assert!(Args::try_parse_from(["backtester"]).is_err());
+    }
 }

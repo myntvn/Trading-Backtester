@@ -13,8 +13,10 @@ pub struct Metrics {
     pub losses: usize,
     /// `None` when there were no trades — not the same as 0%.
     pub win_rate_pct: Option<f64>,
-    pub avg_win: f64,
-    pub avg_loss: f64,
+    /// Mean PnL of winning trades. `None` when there were none.
+    pub avg_win: Option<f64>,
+    /// Mean PnL of losing trades. `None` when there were none.
+    pub avg_loss: Option<f64>,
     ///  Gross wins / gross losses. `None` when there were no losses.
     pub profit_factor: Option<f64>,
     /// Share of bars spent holding a position.
@@ -90,11 +92,11 @@ pub fn compute(bt: &Backtest, periods_per_year: f64) -> Metrics {
     let gross_win: f64 = wins.iter().sum();
     let gross_loss: f64 = losses.iter().sum::<f64>().abs();
 
-    let mean_or_zero = |v: &[f64]| {
+    let mean_or_none = |v: &[f64]| {
         if v.is_empty() {
-            0.0
+            None
         } else {
-            v.iter().sum::<f64>() / v.len() as f64
+            Some(v.iter().sum::<f64>() / v.len() as f64)
         }
     };
 
@@ -114,8 +116,8 @@ pub fn compute(bt: &Backtest, periods_per_year: f64) -> Metrics {
         } else {
             Some(wins.len() as f64 / bt.trades.len() as f64 * 100.0)
         },
-        avg_win: mean_or_zero(&wins),
-        avg_loss: mean_or_zero(&losses),
+        avg_win: mean_or_none(&wins),
+        avg_loss: mean_or_none(&losses),
         profit_factor: if gross_loss == 0.0 {
             None
         } else {
@@ -224,8 +226,8 @@ mod tests {
 
         assert_eq!((m.trades, m.wins, m.losses), (3, 2, 1));
         assert!(approx(m.win_rate_pct.unwrap(), 200.0 / 3.0));
-        assert!(approx(m.avg_win, 15.0));
-        assert!(approx(m.avg_loss, -5.0));
+        assert!(approx(m.avg_win.unwrap(), 15.0));
+        assert!(approx(m.avg_loss.unwrap(), -5.0));
         assert!(approx(m.profit_factor.unwrap(), 6.0)) // 30 / 5
     }
 
@@ -236,6 +238,8 @@ mod tests {
         assert_eq!(m.trades, 0);
         assert_eq!(m.win_rate_pct, None);
         assert_eq!(m.profit_factor, None);
+        assert_eq!(m.avg_win, None);
+        assert_eq!(m.avg_loss, None);
     }
 
     #[test]
@@ -244,6 +248,7 @@ mod tests {
 
         assert_eq!(m.profit_factor, None);
         assert!(approx(m.win_rate_pct.unwrap(), 100.0));
+        assert_eq!(m.avg_loss, None);
     }
 
     #[test]
