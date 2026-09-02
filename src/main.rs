@@ -15,6 +15,7 @@ mod indicators;
 mod metrics;
 mod report;
 mod strategy;
+mod sweep;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "EMA crossover backtester for OHLCV data")]
