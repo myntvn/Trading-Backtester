@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::{
+    data::Bar,
     engine::EngineConfig,
     strategy::{BuyHold, EmaCross},
+    sweep::SweepConfig,
 };
 
 use clap::Parser;
@@ -46,6 +48,30 @@ struct Args {
     /// Skip the buy & hold comparison column
     #[arg(long)]
     no_benchmark: bool,
+
+    /// Run a parameter sweep instead of a single backtest
+    #[arg(long)]
+    sweep: bool,
+
+    /// Fast EMA periods to try when sweeping
+    #[arg(long, value_delimiter = ',', default_value = "5,8,10,12,15,20,25,30")]
+    fast_range: Vec<usize>,
+
+    /// Slow EMA periods to try when sweeping
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "20,30,40,50,80,100,150,200"
+    )]
+    slow_range: Vec<usize>,
+
+    /// Fraction of bars used for training
+    #[arg(long, default_value_t = 0.7)]
+    split: f64,
+
+    /// How many sweep results to show
+    #[arg(long, default_value_t = 15)]
+    top: usize,
 }
 
 fn main() -> Result<()> {
@@ -58,6 +84,10 @@ fn main() -> Result<()> {
         initial_cash: args.cash,
         fee_bps: args.fees,
     };
+
+    if args.sweep {
+        return run_sweep(&bars, &cfg, &args);
+    }
 
     let strat = EmaCross::new(args.fast, args.slow)?;
     let bt = engine::run(&bars, &strat, &cfg)?;
@@ -74,6 +104,33 @@ fn main() -> Result<()> {
 
         report::print_comparison(&[(bt.strategy.as_str(), &m), (bench.strategy.as_str(), &bm)]);
     }
+
+    Ok(())
+}
+
+fn run_sweep(bars: &[Bar], cfg: &EngineConfig, args: &Args) -> Result<()> {
+    let sc = SweepConfig {
+        split: args.split,
+        fast_range: &args.fast_range,
+        slow_range: &args.slow_range,
+        periods_per_year: args.periods_per_year,
+    };
+
+    let mut results = sweep::sweep(bars, cfg, &sc)?;
+    let combos = results.len();
+    sweep::rank_by_train_sharpe(&mut results);
+
+    let k = sweep::split_at(bars.len(), args.split);
+
+    report::print_header(bars.len(), bars[0].ts, bars[bars.len() - 1].ts, cfg.fee_bps);
+    report::print_split(bars, k, args.split);
+    report::print_sweep(&results, args.top);
+
+    // The benchmark must cover the same test window as the strategy.
+    let bench_bt = engine::run(&bars[k..], &strategy::BuyHold, cfg)?;
+    let bench = metrics::compute(&bench_bt, args.periods_per_year);
+
+    report::print_verdict(&results[0], &bench, combos);
 
     Ok(())
 }

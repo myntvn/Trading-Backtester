@@ -99,3 +99,171 @@ pub fn sweep(bars: &[Bar], cfg: &EngineConfig, sc: &SweepConfig) -> Result<Vec<S
     );
     Ok(results)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        data::Bar,
+        engine::EngineConfig,
+        sweep::{SweepConfig, rank_by_train_sharpe, rank_key, split_at, sweep},
+    };
+
+    /// A wobby uptrend, so EMAs actually cross.
+    fn bars(n: usize) -> Vec<Bar> {
+        (0..n)
+            .map(|i| {
+                let c = 100.0 + i as f64 + (i as f64 * 0.7).sin() * 8.0;
+                Bar {
+                    ts: i as i64 * 86_400_000,
+                    open: c,
+                    high: c,
+                    low: c,
+                    close: c,
+                    volume: 0.0,
+                }
+            })
+            .collect()
+    }
+
+    fn cfg() -> EngineConfig {
+        EngineConfig {
+            initial_cash: 10_000.0,
+            fee_bps: 10.0,
+        }
+    }
+
+    fn sc<'a>(fast: &'a [usize], slow: &'a [usize]) -> SweepConfig<'a> {
+        SweepConfig {
+            split: 0.7,
+            fast_range: fast,
+            slow_range: slow,
+            periods_per_year: 365.0,
+        }
+    }
+
+    #[test]
+    fn one_result_per_valid_combination() {
+        let b = bars(300);
+        let r = sweep(&b, &cfg(), &sc(&[5, 10], &[20, 30])).unwrap();
+        assert_eq!(r.len(), 4);
+    }
+
+    #[test]
+    fn invalid_combinations_are_skipped() {
+        let b = bars(300);
+        // 10/20 is valid; 30/20 is not (fast >= slow).
+        let r = sweep(&b, &cfg(), &sc(&[10, 30], &[20])).unwrap();
+
+        assert_eq!(r.len(), 1);
+        assert_eq!((r[0].fast, r[0].slow), (10, 20));
+    }
+
+    #[test]
+    fn all_invalid_is_an_error() {
+        let b = bars(300);
+        assert!(sweep(&b, &cfg(), &sc(&[50], &[20])).is_err());
+    }
+
+    #[test]
+    fn is_deterministic_across_runs() {
+        let b = bars(400);
+        let a = sweep(&b, &cfg(), &sc(&[5, 10, 15], &[30, 50, 80])).unwrap();
+        let c = sweep(&b, &cfg(), &sc(&[5, 10, 15], &[30, 50, 80])).unwrap();
+
+        assert_eq!(a.len(), c.len());
+
+        for (x, y) in a.iter().zip(c.iter()) {
+            assert_eq!((x.fast, x.slow), (y.fast, y.slow));
+            // to_bits() is exact bitwise equality — stronger than ==, and
+            // the right assertion for "the same computation ran twice".
+            assert_eq!(
+                x.train.final_equity.to_bits(),
+                y.train.final_equity.to_bits()
+            );
+            assert_eq!(x.test.final_equity.to_bits(), y.test.final_equity.to_bits());
+        }
+    }
+
+    #[test]
+    fn split_index_is_a_fraction_of_the_bars() {
+        assert_eq!(split_at(100, 0.7), 70);
+        assert_eq!(split_at(1827, 0.7), 1278);
+    }
+
+    #[test]
+    fn train_and_test_do_not_overlap() {
+        let b = bars(100);
+        let k = split_at(b.len(), 0.7);
+        let (train, test) = b.split_at(k);
+
+        assert_eq!(train.len(), 70);
+        assert_eq!(test.len(), 30);
+        assert!(train.last().unwrap().ts < test.first().unwrap().ts);
+    }
+
+    #[test]
+    fn rejects_degenerate_splits() {
+        let b = bars(300);
+        let fast = [10usize];
+        let slow = [30usize];
+
+        for bad in [0.0, 1.0, -0.5, 1.5] {
+            let s = SweepConfig {
+                split: bad,
+                fast_range: &fast,
+                slow_range: &slow,
+                periods_per_year: 365.0,
+            };
+            assert!(
+                sweep(&b, &cfg(), &s).is_err(),
+                "split {bad} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_split_that_leaves_too_few_bars() {
+        let b = bars(3);
+        let fast = [10usize];
+        let slow = [30usize];
+        let s = SweepConfig {
+            split: 0.5,
+            fast_range: &fast,
+            slow_range: &slow,
+            periods_per_year: 365.0,
+        };
+
+        assert!(sweep(&b, &cfg(), &s).is_err());
+    }
+
+    #[test]
+    fn a_configuration_that_never_trades_has_no_sharpe() {
+        // slow = 290 never warms up on a 210-bar training slice.
+        let b = bars(300);
+        let r = sweep(&b, &cfg(), &sc(&[5], &[290])).unwrap();
+
+        assert_eq!(r[0].train.trades, 0);
+        assert_eq!(r[0].train.sharpe, None);
+        assert_eq!(rank_key(&r[0].train), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn ranking_is_descending_with_none_last() {
+        let mut keys = [0.5, f64::NEG_INFINITY, -2.0];
+        keys.sort_by(|a, b| b.total_cmp(a));
+
+        assert_eq!(keys, [0.5, -2.0, f64::NEG_INFINITY]);
+    }
+
+    #[test]
+    fn ranking_orders_results_by_train_sharpe() {
+        let b = bars(400);
+        let mut r = sweep(&b, &cfg(), &sc(&[5, 10, 15], &[30, 50, 80])).unwrap();
+        rank_by_train_sharpe(&mut r);
+
+        let keys: Vec<f64> = r.iter().map(|x| rank_key(&x.train)).collect();
+        for w in keys.windows(2) {
+            assert!(w[0] >= w[1], "not sorted descending: {keys:?}");
+        }
+    }
+}

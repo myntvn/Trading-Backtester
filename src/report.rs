@@ -1,4 +1,9 @@
-use crate::{data::fmt_date, engine::Trade, metrics::Metrics};
+use crate::{
+    data::{Bar, fmt_date},
+    engine::Trade,
+    metrics::Metrics,
+    sweep::SweepResult,
+};
 
 const LABEL_W: usize = 16;
 const COL_W: usize = 18;
@@ -90,4 +95,52 @@ pub fn print_comparison(columns: &[(&str, &Metrics)]) {
         }
         println!();
     }
+}
+
+pub fn print_split(bars: &[Bar], k: usize, split: f64) {
+    println!(
+        "split {:.0}%: {} train bars ({} -> {}), {} test bars ({} -> {})",
+        split * 100.0,
+        k,
+        fmt_date(bars[0].ts),
+        fmt_date(bars[k - 1].ts),
+        bars.len() - k,
+        fmt_date(bars[k].ts),
+        fmt_date(bars[bars.len() - 1].ts),
+    )
+}
+
+pub fn print_sweep(results: &[SweepResult], top: usize) {
+    println!(
+        "\n{:>5} {:>5} | {:>11} {:>9} | {:>11} {:>9} {:>9} {:>7}",
+        "fast", "slow", "train ret", "train shp", "test ret", "test shp", "test dd", "trades"
+    );
+    println!("{}", "-".repeat(80));
+
+    for r in results.iter().take(top) {
+        println!(
+            "{:>5} {:>5} | {:>10.1}% {:>9} | {:>10.1}% {:>9} {:>8.1}% {:>7}",
+            r.fast,
+            r.slow,
+            r.train.total_return_pct,
+            fmt_opt(r.train.sharpe, ""),
+            r.test.total_return_pct,
+            fmt_opt(r.test.sharpe, ""),
+            r.test.max_drawdown_pct,
+            r.test.trades,
+        );
+    }
+}
+
+pub fn print_verdict(best: &SweepResult, bench: &Metrics, combos: usize) {
+    println!(
+        "\nbest on train: {}/{}  (chosen from {} configurations)",
+        best.fast, best.slow, combos
+    );
+
+    print_comparison(&[
+        ("in-sample", &best.train),
+        ("out-of-sample", &best.test),
+        ("test b&h", bench),
+    ]);
 }
