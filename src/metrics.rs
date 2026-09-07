@@ -121,7 +121,7 @@ pub fn compute(bt: &Backtest, periods_per_year: f64) -> Metrics {
         profit_factor: if gross_loss == 0.0 {
             None
         } else {
-            Some(gross_win / gross_loss)
+            Some(gross_win.abs() / gross_loss)
         },
         exposure_pct: if bt.equity.is_empty() {
             0.0
