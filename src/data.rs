@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, TimeZone, Utc};
 use std::path::Path;
 
@@ -18,6 +18,18 @@ impl Bar {
         Utc.timestamp_millis_opt(self.ts)
             .single()
             .expect("timestamp out of range")
+    }
+
+    /// Whether this is a well-formed candle.
+    ///
+    /// Catches malformed exchange data: an inverted range, a price outside
+    /// its own high/low, or a non-positive price.
+    fn is_coherent(&self) -> bool {
+        self.low > 0.0
+            && self.high >= self.low
+            && self.high >= self.open.max(self.close)
+            && self.low <= self.open.min(self.close)
+            && self.volume >= 0.0
     }
 }
 
@@ -60,7 +72,11 @@ pub fn load_csv(path: &Path) -> Result<Vec<Bar>> {
         let rec = result.with_context(|| format!("reading row {}", i + 1))?;
 
         match parse_row(&rec) {
-            Ok(bar) => bars.push(bar),
+            Ok(bar) if bar.is_coherent() => bars.push(bar),
+
+            Ok(bar) => bail!("row {} is not a coherent candle: {bar:?}", i + 1),
+
+            // Tolerate a header on the very first row; any other bad row is a real bug.
             Err(_) if i == 0 => continue,
 
             Err(e) => return Err(e).with_context(|| format!("row {}", i + 1)),
@@ -86,9 +102,57 @@ pub fn fmt_date(ts: i64) -> String {
 mod tests {
     use super::*;
 
+    fn candle(open: f64, high: f64, low: f64, close: f64, volume: f64) -> Bar {
+        Bar {
+            ts: 0,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        }
+    }
+
     #[test]
     fn normalizes_microsecond_timestamps() {
         assert_eq!(normalize_ts(1_704_067_200_000), 1_704_067_200_000);
         assert_eq!(normalize_ts(1_704_067_200_000_000), 1_704_067_200_000);
+    }
+
+    #[test]
+    fn accepts_a_well_formed_candle() {
+        assert!(candle(100.0, 110.0, 95.0, 105.0, 12.0).is_coherent());
+    }
+
+    #[test]
+    fn accepts_a_flat_candle() {
+        // All four prices equal is legal — a bar with no movement.
+        assert!(candle(100.0, 100.0, 100.0, 100.0, 0.0).is_coherent());
+    }
+
+    #[test]
+    fn rejects_an_inverted_range() {
+        assert!(!candle(100.0, 95.0, 110.0, 105.0, 12.0).is_coherent());
+    }
+
+    #[test]
+    fn rejects_a_close_above_the_high() {
+        assert!(!candle(100.0, 110.0, 95.0, 115.0, 12.0).is_coherent());
+    }
+
+    #[test]
+    fn rejects_an_open_below_the_low() {
+        assert!(!candle(90.0, 110.0, 95.0, 105.0, 12.0).is_coherent());
+    }
+
+    #[test]
+    fn rejects_non_positive_prices() {
+        assert!(!candle(0.0, 110.0, 0.0, 105.0, 12.0).is_coherent());
+        assert!(!candle(100.0, 110.0, -5.0, 105.0, 12.0).is_coherent());
+    }
+
+    #[test]
+    fn rejects_negative_volume() {
+        assert!(!candle(100.0, 110.0, 95.0, 105.0, -1.0).is_coherent());
     }
 }
